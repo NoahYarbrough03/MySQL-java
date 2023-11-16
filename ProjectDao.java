@@ -1,10 +1,10 @@
 package projects.dao;
 
 import provided.util.DaoBase;
-import projects.entity.Project;
-import projects.entity.Material;
-import projects.entity.Step;
 import projects.entity.Category;
+import projects.entity.Material;
+import projects.entity.Project;
+import projects.entity.Step;
 import projects.exception.DbException;
 
 import java.sql.Connection;
@@ -13,7 +13,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 public class ProjectDao extends DaoBase {
     private static final String CATEGORY_TABLE = "category";
@@ -22,7 +21,47 @@ public class ProjectDao extends DaoBase {
     private static final String PROJECT_CATEGORY_TABLE = "project_category";
     private static final String STEP_TABLE = "step";
 
-    // Existing insertProject method
+    public Project insertProject(Project project) {
+        String sql = "INSERT INTO " + PROJECT_TABLE + " (project_name, estimated_hours, actual_hours, difficulty, notes) VALUES (?, ?, ?, ?, ?)";
+
+        try (Connection conn = DbConnection.getConnection()) {
+            startTransaction(conn);
+
+            try (PreparedStatement stmnt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
+                stmnt.setString(1, project.getProjectName());
+                stmnt.setBigDecimal(2, project.getEstimatedHours());
+                stmnt.setBigDecimal(3, project.getActualHours());
+                stmnt.setInt(4, project.getDifficulty());
+                stmnt.setString(5, project.getNotes());
+
+                int rowsAffected = stmnt.executeUpdate();
+
+                if (rowsAffected == 0) {
+                    rollbackTransaction(conn);
+                    return null; // Insertion failed
+                }
+
+                // Retrieve the generated project_id
+                try (ResultSet generatedKeys = stmnt.getGeneratedKeys()) {
+                    if (generatedKeys.next()) {
+                        project.setProjectId(generatedKeys.getInt(1));
+                    } else {
+                        rollbackTransaction(conn);
+                        return null; // Failed to retrieve generated project_id
+                    }
+                }
+            } catch (SQLException e) {
+                rollbackTransaction(conn);
+                throw new DbException(e);
+            }
+
+            commitTransaction(conn);
+            return project; // Project added successfully
+        } catch (SQLException e) {
+            throw new DbException(e);
+        }
+    }
+
 
     public List<Project> fetchAllProjects() {
         String sql = "SELECT * FROM " + PROJECT_TABLE + " ORDER BY project_name";
@@ -39,55 +78,19 @@ public class ProjectDao extends DaoBase {
                     projects.add(project);
                 }
 
-            } catch (Exception e) {
+            } catch (SQLException e) {
                 rollbackTransaction(conn);
+                System.err.println("Error executing SQL query: " + e.getMessage());
                 throw new DbException(e);
             }
 
             commitTransaction(conn);
             return projects;
         } catch (SQLException e) {
+            System.err.println("Error establishing database connection: " + e.getMessage());
             throw new DbException(e);
         }
     }
-
-    public Project fetchProjectById(Integer projectId) {
-        String sql = "SELECT * FROM " + PROJECT_TABLE + " WHERE project_id = ?";
-        try (Connection conn = DbConnection.getConnection()) {
-            startTransaction(conn);
-
-            try {
-                Project project = null;
-
-                try (PreparedStatement stmnt = conn.prepareStatement(sql)) {
-                    stmnt.setInt(1, projectId);
-
-                    try (ResultSet rs = stmnt.executeQuery()) {
-                        if (rs.next()) {
-                            project = extractProject(rs);
-                        }
-                    }
-                }
-
-                if (project != null) {
-                    project.setMaterials(fetchMaterials(conn, projectId));
-                    project.setSteps(fetchSteps(conn, projectId));
-                    project.setCategories(fetchCategories(conn, projectId));
-                    commitTransaction(conn);
-                    return project; // Return the project here
-                } else {
-                    // Handle the case where no project was found (e.g., throw an exception)
-                    throw new DbException("Project not found with ID: " + projectId);
-                }
-            } catch (Exception e) {
-                rollbackTransaction(conn);
-                throw new DbException(e);
-            }
-        } catch (SQLException e) {
-            throw new DbException(e);
-        }
-    }
-
 
     private List<Material> fetchMaterials(Connection conn, Integer projectId) throws SQLException {
         String sql = "SELECT * FROM " + MATERIAL_TABLE + " WHERE project_id = ?";
@@ -180,8 +183,63 @@ public class ProjectDao extends DaoBase {
         return category;
     }
 
-	public Project insertProject(Project project) {
-		// TODO Auto-generated method stub
-		return null;
-	}
+    public boolean modifyProjectDetails(Project updatedProject) {
+        String sql = "UPDATE " + PROJECT_TABLE + " SET project_name=?, estimated_hours=?, actual_hours=?, " +
+                     "difficulty=?, notes=? WHERE project_id=?";
+        try (Connection conn = DbConnection.getConnection()) {
+            startTransaction(conn);
+
+            try (PreparedStatement stmnt = conn.prepareStatement(sql)) {
+                stmnt.setString(1, updatedProject.getProjectName());
+                stmnt.setBigDecimal(2, updatedProject.getEstimatedHours());
+                stmnt.setBigDecimal(3, updatedProject.getActualHours());
+                stmnt.setInt(4, updatedProject.getDifficulty());
+                stmnt.setString(5, updatedProject.getNotes());
+                stmnt.setInt(6, updatedProject.getProjectId());
+
+                int rowsAffected = stmnt.executeUpdate();
+
+                if (rowsAffected == 0) {
+                    rollbackTransaction(conn);
+                    return false; // The project does not exist
+                }
+            } catch (SQLException e) {
+                rollbackTransaction(conn);
+                throw new DbException(e);
+            }
+
+            commitTransaction(conn);
+            return true; // Project updated successfully
+        } catch (SQLException e) {
+            throw new DbException(e);
+        }
+    }
+
+    public boolean deleteProject(Integer projectId) {
+        String sql = "DELETE FROM " + PROJECT_TABLE + " WHERE project_id=?";
+        try (Connection conn = DbConnection.getConnection()) {
+            startTransaction(conn);
+
+            try (PreparedStatement stmnt = conn.prepareStatement(sql)) {
+                stmnt.setInt(1, projectId);
+
+                int rowsAffected = stmnt.executeUpdate();
+
+                if (rowsAffected == 0) {
+                    rollbackTransaction(conn);
+                    System.out.println("Error: The project with ID " + projectId + " does not exist.");
+                    return false; // The project does not exist
+                }
+            } catch (SQLException e) {
+                rollbackTransaction(conn);
+                throw new DbException(e);
+            }
+
+            commitTransaction(conn);
+            System.out.println("Project with ID " + projectId + " deleted successfully.");
+            return true; // Project deleted successfully
+        } catch (SQLException e) {
+            throw new DbException(e);
+        }
+    }
 }
